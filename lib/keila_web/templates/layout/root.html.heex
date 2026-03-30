@@ -11,11 +11,11 @@
         view_module(@conn),
         view_template(@conn),
         :title,
-        gettext("Open Source Newsletter Tool")
-      ) <> " · Keila"}
+        gettext("Newsletter Platform")
+      ) <> " · Serendipity"}
     </title>
     <meta property="og:image" content={Routes.static_url(@conn, "/images/og_image.png")} />
-    <meta property="og:description" content="Open Source Newsletters" />
+    <meta property="og:description" content="Newsletter Platform" />
     <meta name="twitter:card" content="summary" />
     <link phx-track-static rel="stylesheet" href={Routes.static_path(@conn, "/css/app.css")} />
     <script
