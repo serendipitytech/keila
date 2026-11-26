@@ -369,12 +369,19 @@ defmodule Keila.Mailings do
     `:sent` (sorted by `sent_at` in descending order).
   - `:search` - only returns campaigns where the subject or content contains
     the given string (not case-sensitive).
+  - `:sort` - overrides the default order. `:newest` and `:oldest` order by the
+    campaign's relevant date (sent, else scheduled, else last updated).
+    `:status` groups drafts, then scheduled, then sent campaigns, newest first
+    within each group.
+  - `:preload` - list of associations (e.g. `[:segment]`) to preload.
   - `:paginate` - `true` or `Keila.Pagination.paginate/2` options to enable
     pagination.
   """
   @spec get_project_campaigns(Project.id(), [
           {:status, :draft | :scheduled | :sent}
           | {:search, String.t() | nil}
+          | {:sort, :newest | :oldest | :status | nil}
+          | {:preload, [atom()]}
           | {:paginate, boolean() | Keyword.t()}
         ]) :: [Campaign.t()] | Keila.Pagination.t(Campaign.t())
   def get_project_campaigns(project_id, opts \\ []) when is_id(project_id) do
@@ -384,8 +391,9 @@ defmodule Keila.Mailings do
       from(c in Campaign, where: c.project_id == ^project_id)
       |> filter_campaigns_by_status(status)
       |> filter_campaigns_by_string(Keyword.get(opts, :search))
-      |> sort_campaigns(status)
+      |> sort_campaigns(Keyword.get(opts, :sort), status)
       |> order_by([c], desc: c.id)
+      |> preload(^Keyword.get(opts, :preload, []))
 
     case Keyword.get(opts, :paginate) do
       true -> Keila.Pagination.paginate(query)
@@ -421,9 +429,51 @@ defmodule Keila.Mailings do
     )
   end
 
-  defp sort_campaigns(query, :scheduled), do: order_by(query, [c], asc: c.scheduled_for)
-  defp sort_campaigns(query, :sent), do: order_by(query, [c], desc: c.sent_at)
-  defp sort_campaigns(query, _status), do: order_by(query, [c], desc: c.updated_at)
+  defp sort_campaigns(query, :newest, _status),
+    do: order_by(query, [c], desc: coalesce(c.sent_at, coalesce(c.scheduled_for, c.updated_at)))
+
+  defp sort_campaigns(query, :oldest, _status),
+    do: order_by(query, [c], asc: coalesce(c.sent_at, coalesce(c.scheduled_for, c.updated_at)))
+
+  defp sort_campaigns(query, :status, _status) do
+    order_by(query, [c],
+      asc:
+        fragment(
+          "CASE WHEN ? IS NOT NULL THEN 2 WHEN ? IS NOT NULL THEN 1 ELSE 0 END",
+          c.sent_at,
+          c.scheduled_for
+        ),
+      desc: coalesce(c.sent_at, coalesce(c.scheduled_for, c.updated_at))
+    )
+  end
+
+  defp sort_campaigns(query, _sort, :scheduled), do: order_by(query, [c], asc: c.scheduled_for)
+  defp sort_campaigns(query, _sort, :sent), do: order_by(query, [c], desc: c.sent_at)
+  defp sort_campaigns(query, _sort, _status), do: order_by(query, [c], desc: c.updated_at)
+
+  @doc """
+  Returns a map of campaign ID to the number of recipients (messages created
+  for the campaign) for the given campaigns.
+
+  Campaigns without any messages are not included in the map. Messages are
+  removed by `Keila.Mailings.MessagePruner` after a retention period, so the
+  count of older campaigns may be lower than the number of contacts originally
+  addressed.
+  """
+  @spec get_campaigns_recipient_counts([Campaign.t()]) :: %{Campaign.id() => pos_integer()}
+  def get_campaigns_recipient_counts([]), do: %{}
+
+  def get_campaigns_recipient_counts(campaigns) when is_list(campaigns) do
+    ids = Enum.map(campaigns, & &1.id)
+
+    from(m in Message,
+      where: m.campaign_id in ^ids,
+      group_by: m.campaign_id,
+      select: {m.campaign_id, count(m.id)}
+    )
+    |> Repo.all()
+    |> Map.new()
+  end
 
   @doc """
   Returns the total number of Campaigns in the specified Project and the number

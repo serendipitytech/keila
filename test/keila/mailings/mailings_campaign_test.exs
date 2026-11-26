@@ -99,6 +99,59 @@ defmodule Keila.MailingsCampaignTest do
   end
 
   @tag :mailings_campaign
+  test "sort campaigns and preload segments", %{project: project} do
+    now = DateTime.utc_now(:second)
+    in_hours = fn hours -> DateTime.add(now, hours, :hour) end
+    segment = insert!(:contacts_segment, project_id: project.id, name: "Volunteers")
+
+    draft =
+      insert!(:mailings_campaign,
+        project_id: project.id,
+        segment_id: segment.id,
+        updated_at: in_hours.(-5)
+      )
+
+    scheduled = insert!(:mailings_campaign, project_id: project.id, scheduled_for: in_hours.(3))
+    sent_old = insert!(:mailings_campaign, project_id: project.id, sent_at: in_hours.(-10))
+    sent_new = insert!(:mailings_campaign, project_id: project.id, sent_at: in_hours.(-1))
+
+    ids = fn opts ->
+      project.id |> Mailings.get_project_campaigns(opts) |> Enum.map(& &1.id)
+    end
+
+    assert ids.(sort: :newest) == [scheduled.id, sent_new.id, draft.id, sent_old.id]
+    assert ids.(sort: :oldest) == [sent_old.id, draft.id, sent_new.id, scheduled.id]
+    assert ids.(sort: :status) == [draft.id, scheduled.id, sent_new.id, sent_old.id]
+
+    campaigns = Mailings.get_project_campaigns(project.id, preload: [:segment])
+    assert %{name: "Volunteers"} = Enum.find(campaigns, &(&1.id == draft.id)).segment
+    assert is_nil(Enum.find(campaigns, &(&1.id == sent_new.id)).segment)
+  end
+
+  @tag :mailings_campaign
+  test "get recipient counts for campaigns", %{project: project} do
+    sender = insert!(:mailings_sender, project_id: project.id)
+    with_messages = insert!(:mailings_campaign, project_id: project.id, sender_id: sender.id)
+    without_messages = insert!(:mailings_campaign, project_id: project.id)
+
+    for _ <- 1..3 do
+      contact = insert!(:contact, project_id: project.id)
+
+      insert!(:message,
+        project_id: project.id,
+        campaign_id: with_messages.id,
+        contact_id: contact.id,
+        sender_id: sender.id
+      )
+    end
+
+    assert %{with_messages.id => 3} ==
+             Mailings.get_campaigns_recipient_counts([with_messages, without_messages])
+
+    assert %{} == Mailings.get_campaigns_recipient_counts([])
+  end
+
+  @tag :mailings_campaign
   test "paginate campaigns", %{project: project} do
     insert_n!(:mailings_campaign, 3, fn _ -> %{project_id: project.id, subject: "Brian"} end)
     insert!(:mailings_campaign, project_id: project.id, subject: "Peter")
