@@ -17,6 +17,49 @@ defmodule KeilaWeb.CampaignControllerTest do
     end
 
     @tag :campaign_controller
+    test "shows segment, status and recipient count, and sorts", %{conn: conn} do
+      {conn, project} = with_login_and_project(conn)
+      sender = insert!(:mailings_sender, project_id: project.id)
+      segment = insert!(:contacts_segment, project_id: project.id, name: "Volunteers")
+      now = DateTime.utc_now(:second)
+
+      sent_old =
+        insert!(:mailings_campaign,
+          project_id: project.id,
+          sender_id: sender.id,
+          segment_id: segment.id,
+          subject: "Older send",
+          sent_at: DateTime.add(now, -7200)
+        )
+
+      insert!(:mailings_campaign,
+        project_id: project.id,
+        subject: "Newer send",
+        sent_at: DateTime.add(now, -3600)
+      )
+
+      for _ <- 1..2 do
+        contact = insert!(:contact, project_id: project.id)
+
+        insert!(:message,
+          project_id: project.id,
+          campaign_id: sent_old.id,
+          contact_id: contact.id,
+          sender_id: sender.id
+        )
+      end
+
+      {:ok, lv, html} = conn |> get(Routes.campaign_path(conn, :index_sent, project.id)) |> live()
+      assert html =~ "Volunteers"
+      assert html =~ "All contacts"
+      assert html =~ "2 recipients"
+      assert :binary.match(html, "Newer send") < :binary.match(html, "Older send")
+
+      html = lv |> element("#campaign-sort-form") |> render_change(%{"sort" => "oldest"})
+      assert :binary.match(html, "Older send") < :binary.match(html, "Newer send")
+    end
+
+    @tag :campaign_controller
     test "show empty state", %{conn: conn} do
       {conn, project} = with_login_and_project(conn)
       conn = get(conn, Routes.campaign_path(conn, :index, project.id))

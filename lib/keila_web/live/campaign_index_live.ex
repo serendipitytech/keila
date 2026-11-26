@@ -3,6 +3,7 @@ defmodule KeilaWeb.CampaignIndexLive do
   alias Keila.Mailings
 
   @page_size 12
+  @sort_options ["", "newest", "oldest", "status"]
 
   on_mount {KeilaWeb.LiveAuth, :require_auth}
   on_mount {KeilaWeb.LiveAuth, :require_project}
@@ -25,6 +26,7 @@ defmodule KeilaWeb.CampaignIndexLive do
     socket
     |> assign(:campaigns_counts, Mailings.get_project_campaigns_counts(project_id))
     |> assign(:search, "")
+    |> assign(:sort, nil)
     |> assign(:page, 0)
     |> put_campaigns()
   end
@@ -64,6 +66,19 @@ defmodule KeilaWeb.CampaignIndexLive do
   end
 
   @impl true
+  def handle_event("sort", %{"sort" => sort}, socket) when sort in @sort_options do
+    sort = if sort == "", do: nil, else: String.to_existing_atom(sort)
+
+    socket =
+      socket
+      |> assign(:sort, sort)
+      |> assign(:page, 0)
+      |> put_campaigns()
+
+    {:noreply, socket}
+  end
+
+  @impl true
   def handle_event("change-page", %{"page" => page}, socket) do
     socket =
       socket
@@ -86,11 +101,14 @@ defmodule KeilaWeb.CampaignIndexLive do
       Mailings.get_project_campaigns(socket.assigns.current_project.id,
         status: selected_status,
         search: search,
+        sort: socket.assigns.sort,
+        preload: [:segment],
         paginate: [page: socket.assigns.page, page_size: @page_size]
       )
 
     socket
     |> assign(:selected_status, selected_status)
     |> assign(:campaigns, campaigns)
+    |> assign(:recipient_counts, Mailings.get_campaigns_recipient_counts(campaigns.data))
   end
 end
